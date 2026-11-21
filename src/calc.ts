@@ -23,7 +23,10 @@ const payoutSchedule = [
   { code: '000538', month: '2027-09', numerator: 1038, denominator: 2602, note: '白药特别分红，不确定', special: true },
 ];
 const payoutMonths = ['2026-12', '2027-01', '2027-02', '2027-03', '2027-04', '2027-05', '2027-06', '2027-07', '2027-08', '2027-09', '2027-10', '2027-11'];
-const cents = (amount: number) => Math.round(amount * 100) / 100;
+const cents = (amount: number) => {
+  const scaled = amount * 100;
+  return Math.round(scaled + Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4) / 100;
+};
 export function monthlyPayouts(rows: Pick<Holding, 'code' | 'name' | 'shares' | 'dps'>[]) {
   const months = payoutMonths.map(month => {
     const entries = payoutSchedule.filter(s => s.month === month).map(s => {

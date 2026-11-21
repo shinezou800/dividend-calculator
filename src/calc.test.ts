@@ -85,6 +85,12 @@ describe('按持仓测算到账月份', () => {
     expect(result.total).toBe(5.4);
     expect(result.months[6].note).toBe('平安末期3.5 + 兴业末期0');
   });
+  it.each([[525, 263.03], [524.9999, 263.02], [525.0001, 263.03]])('兴业股数 %s 的半分边界正确四舍五入', (shares, expected) => {
+    const result = monthlyPayouts([{ ...defaults[1], shares }]);
+    expect(result.months[6].amount).toBe(expected);
+    expect(result.months[6].note).toBe(`平安末期0 + 兴业末期${expected}`);
+    expect(result.total).toBeCloseTo(result.months[2].amount + expected, 8);
+  });
 });
 describe('编辑权限默认拒绝', () => {
   it.each([[false, false, false], [false, true, false], [true, false, false], [true, true, true]])('登录=%s 管理员=%s 编辑=%s', (loggedIn, admin, expected) => {
