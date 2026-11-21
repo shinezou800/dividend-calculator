@@ -132,3 +132,57 @@ it('快速退出并重新登录仍丢弃旧会话的待保存修改', async () =
   expect(mocks.update).not.toHaveBeenCalled();
   expect((screen.getByLabelText('平安股数') as HTMLInputElement).value).toBe('5000');
 });
+
+it('管理员首次读取失败后重新加载成功恢复编辑，不自动保存旧行', async () => {
+  mocks.load.mockRejectedValueOnce(new Error('首次读取失败'));
+  render(<App />); await tick();
+  expect(mocks.rpc).toHaveBeenCalledWith('is_admin');
+  expect(screen.queryByLabelText('平安股数')).toBeNull();
+  serverRow.shares = 8000;
+  fireEvent.click(screen.getByText('重新加载'));
+  await tick(1000);
+  expect((screen.getByLabelText('平安股数') as HTMLInputElement).value).toBe('8000');
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(mocks.update).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('平安股数'), { target: { value: '8001' } });
+  await tick(600);
+  expect(serverRow.shares).toBe(8001);
+  expect(mocks.update).toHaveBeenCalledTimes(1);
+});
+
+it('非管理员读取失败后重新加载成功仍保持只读', async () => {
+  mocks.rpc.mockResolvedValue({ data: false, error: null });
+  mocks.load.mockRejectedValueOnce(new Error('首次读取失败'));
+  render(<App />); await tick();
+  fireEvent.click(screen.getByText('重新加载'));
+  await tick(1000);
+  expect(screen.queryByLabelText('平安股数')).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByText('该账号无编辑权限')).toBeTruthy();
+  expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it('管理员重试读取仍失败时不会开放编辑', async () => {
+  mocks.load.mockRejectedValueOnce(new Error('首次读取失败')).mockRejectedValueOnce(new Error('重试失败'));
+  render(<App />); await tick();
+  fireEvent.click(screen.getByText('重新加载'));
+  await tick(1000);
+  expect(screen.queryByLabelText('平安股数')).toBeNull();
+  expect(screen.getByRole('alert').textContent).toContain('数据加载失败');
+  expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it('重新加载未结束时退出，迟到的管理员结果不能恢复编辑或覆盖新持仓', async () => {
+  let finish!: (rows: Holding[]) => void;
+  mocks.load.mockRejectedValueOnce(new Error('首次读取失败'));
+  render(<App />); await tick();
+  mocks.load.mockImplementationOnce(() => new Promise<Holding[]>(resolve => { finish = resolve; }));
+  fireEvent.click(screen.getByText('重新加载')); await tick();
+  await auth(false);
+  await act(async () => { finish([{ ...serverRow, shares: 9999 }]); });
+  await tick(1000);
+  expect(screen.queryByLabelText('平安股数')).toBeNull();
+  expect(screen.getByText('管理员登录')).toBeTruthy();
+  expect(screen.queryByText('9,999')).toBeNull();
+  expect(mocks.update).not.toHaveBeenCalled();
+});

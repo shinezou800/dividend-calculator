@@ -82,18 +82,14 @@ export default function App() {
   const editable = canEdit(loggedIn, admin);
   const unsaved = Object.values(saveStates).some(s => s !== '已保存');
   const summary = totals(rows);
-  async function refresh() {
-    setLoading(true); setError('');
-    try { setRows(await loadHoldings()); } catch { setError('数据加载失败，请检查网络、Supabase 配置及数据库迁移。'); }
-    finally { setLoading(false); }
-  }
+  const refresh = useRef<() => void>(() => {});
   useEffect(() => {
     if (!supabase) return;
     let active = true;
     let version = 0;
     let currentUserId: string | null | undefined;
-    async function checkAuth(userId: string | null) {
-      if (!active || currentUserId === userId) return;
+    async function checkAuth(userId: string | null, force = false) {
+      if (!active || (!force && currentUserId === userId)) return;
       currentUserId = userId;
       const current = ++version;
       const hasSession = userId !== null;
@@ -117,6 +113,7 @@ export default function App() {
         if (active && current === version) { setLoading(false); setAuthChecked(true); }
       }
     }
+    refresh.current = () => { void checkAuth(currentUserId ?? null, true); };
     void supabase.auth.getSession().then(({ data, error }) => { if (error) setAuthMessage('登录状态读取失败。'); void checkAuth(data.session?.user.id ?? null); });
     const { data } = supabase.auth.onAuthStateChange((_event, session) => { setTimeout(() => { if (active) void checkAuth(session?.user.id ?? null); }, 0); });
     return () => { active = false; data.subscription.unsubscribe(); };
@@ -162,7 +159,7 @@ export default function App() {
     {loggedIn && authChecked && !admin && <div className="notice">该账号无编辑权限</div>}
     {authMessage && <p role="status" className="notice">{authMessage}</p>}
     {loginOpen && !loggedIn && <form className="panel login" onSubmit={e => { e.preventDefault(); void authenticate(sent); }}><h2>管理员登录</h2><label>邮箱<input type="email" required value={email} disabled={sent} onChange={e => setEmail(e.target.value)} autoComplete="email" /></label>{sent && <label>六位验证码<input required pattern="[0-9]{6}" maxLength={6} inputMode="numeric" autoComplete="one-time-code" value={token} onChange={e => setToken(e.target.value)} /></label>}<button className="primary" disabled={busy}>{busy ? '处理中…' : sent ? '验证并登录' : '发送验证码'}</button>{sent && <button type="button" onClick={() => { setSent(false); setToken(''); }}>更换邮箱 / 重新发送</button>}</form>}
-    {error && <div className="alert" role="alert">{error}{!unsaved && <button onClick={() => void refresh()}>重新加载</button>}</div>}
+    {error && <div className="alert" role="alert">{error}{!unsaved && <button onClick={() => refresh.current()}>重新加载</button>}</div>}
     <section className="summary" aria-label="持仓概览">{[['总市值', `¥${money(summary.value)}`], ['年分红合计', `¥${money(summary.income)}`], ['组合股息率', percent(summary.yield)], ['月均分红', `¥${money(summary.monthly)}`]].map(([label, value]) => <div key={label}><span>{label}</span><strong>{loading || !supabase || (error && rows.length === 0) ? '—' : value}</strong></div>)}</section>
     <section><div className="section-title"><h2>我的持仓 <small>{rows.length} 只股票</small></h2>{editable && <button className="primary" disabled={busy} onClick={() => setAdding(!adding)}>{adding ? '取消添加' : '＋ 添加股票'}</button>}</div><p className="section-note">{editable ? '修改数值后约 600 毫秒自动保存；所有访客可查看。' : '所有人可查看，仅管理员登录后可修改。'}</p>
       {editable && adding && <form className="panel add-form" onSubmit={add}><h3>添加股票</h3>{[['code', '股票代码'], ['name', '股票名称'], ['shares', '股数'], ['price', '价格（元）'], ['dps', '每股分红（元）']].map(([name, label], i) => <label key={name}>{label}<input name={name} required type={i < 2 ? 'text' : 'number'} min={i < 2 ? undefined : '0'} step="any" /></label>)}<button className="primary" disabled={busy}>{busy ? '添加中…' : '确认添加'}</button></form>}
