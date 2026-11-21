@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { annual, dividendYield, monthlyPayouts, totals, type Holding } from './calc';
-import { canEdit, loadHoldings, supabase } from './db';
+import { annual, dividendYield, isPayout, monthlyPayouts, totals, type Holding, type Payout } from './calc';
+import { canEdit, loadHoldings, normalizeHolding, supabase } from './db';
 
 const money = (n: number) => n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const percent = (n: number) => `${(n * 100).toFixed(2)}%`;
@@ -9,6 +9,7 @@ type SaveState = '保存中' | '已保存' | '保存失败';
 
 function StockCard({ row, editable, authSession, onChange, onDelete, onStatus }: { row: Holding; editable: boolean; authSession: { readonly current: number }; onChange: (h: Holding) => void; onDelete: () => void; onStatus: (id: string, s: SaveState) => void }) {
   const [status, setStatus] = useState<SaveState>('已保存');
+  const [payoutError, setPayoutError] = useState('');
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const queue = useRef(Promise.resolve());
   const session = useRef(0);
@@ -26,7 +27,7 @@ function StockCard({ row, editable, authSession, onChange, onDelete, onStatus }:
     };
   }, [editable]);
   function save(next: Holding) {
-    if (!editable) return;
+    if (!editable || !next.payouts.every(isPayout)) return;
     const version = ++latest.current;
     const editSession = session.current;
     const authVersion = authSession.current;
@@ -38,7 +39,7 @@ function StockCard({ row, editable, authSession, onChange, onDelete, onStatus }:
       queue.current = queue.current.then(async () => {
         if (!isCurrent()) return;
         try {
-          const result = await supabase!.from('holdings').update({ shares: next.shares, price: next.price, dps: next.dps, updated_at: new Date().toISOString() }).eq('id', next.id).select('id').single();
+          const result = await supabase!.from('holdings').update({ shares: next.shares, price: next.price, dps: next.dps, payouts: next.payouts, updated_at: new Date().toISOString() }).eq('id', next.id).select('id').single();
           if (result.error) throw result.error;
           if (isCurrent()) {
             pending.current = null;
@@ -55,10 +56,35 @@ function StockCard({ row, editable, authSession, onChange, onDelete, onStatus }:
     onChange(next);
     save(next);
   }
+  function editPayouts(payouts: Payout[]) {
+    if (!payouts.every(isPayout)) { setPayoutError('月份须为 1–12，每股到账须为非负数。'); return; }
+    setPayoutError('');
+    const next = { ...row, payouts };
+    onChange(next);
+    save(next);
+  }
+  function editPayout(index: number, patch: Partial<Payout>) {
+    editPayouts(row.payouts.map((p, i) => i === index ? { ...p, ...patch } : p));
+  }
   return <article className="stock-card">
     <div className="stock-heading"><div><h3>{row.name} <span>{row.code}</span></h3><p>{row.dps_note || '自定义持仓'}</p></div>{editable && <button className="delete" disabled={status === '保存中'} onClick={onDelete} aria-label={`删除${row.name}`}>删除</button>}</div>
     <div className="stock-inputs">{([['shares', '股数'], ['price', '价格（元）'], ['dps', '每股分红（元）']] as const).map(([field, label]) => <label key={field}>{label}{editable ? <input aria-label={`${row.name}${label}`} type="number" min="0" step="any" value={row[field]} onChange={e => edit(field, e.target.value)} /> : <strong>{row[field].toLocaleString('zh-CN', { maximumFractionDigits: 6 })}</strong>}</label>)}</div>
     <div className="stock-bottom"><span>股息率 <b>{percent(dividendYield(row))}</b></span><span>年分红 <b>¥{money(annual(row))}</b></span></div>
+    {editable && <details className="payout-editor"><summary>到账月份</summary>
+      <p className="section-note">每股到账独立于年度每股分红；12 月对应 2026 年，其余月份对应 2027 年。</p>
+      {row.payouts.map((p, i) => <div className="payout-entry" key={i}>
+        <label>月份<select aria-label={`${row.name}到账${i + 1}月份`} value={p.month} onChange={e => editPayout(i, { month: Number(e.target.value) })}>{Array.from({ length: 12 }, (_, n) => <option key={n + 1} value={n + 1}>{n + 1} 月</option>)}</select></label>
+        <label>每股到账（元）<input aria-label={`${row.name}到账${i + 1}每股金额`} type="number" min="0" step="any" value={p.dps} onChange={e => {
+          if (!e.target.value.trim()) { setPayoutError('每股到账不能为空，须为非负数。'); return; }
+          editPayout(i, { dps: Number(e.target.value) });
+        }} /></label>
+        <label className="payout-note">备注（可选）<input aria-label={`${row.name}到账${i + 1}备注`} value={p.note || ''} onChange={e => editPayout(i, { note: e.target.value })} /></label>
+        <label className="payout-special"><input aria-label={`${row.name}到账${i + 1}特别分红`} type="checkbox" checked={p.special || false} onChange={e => editPayout(i, { special: e.target.checked })} />特别分红（不计入默认合计）</label>
+        <button type="button" aria-label={`删除${row.name}到账${i + 1}`} onClick={() => editPayouts(row.payouts.filter((_, n) => n !== i))}>删除到账</button>
+      </div>)}
+      {payoutError && <p role="alert">{payoutError}</p>}
+      <button type="button" onClick={() => editPayouts([...row.payouts, { month: 1, dps: 0 }])}>添加到账</button>
+    </details>}
     {editable && <div className={`save-state ${status === '保存失败' ? 'failed' : ''}`} role="status">{status}{status === '保存失败' && <button onClick={() => { if (pending.current) save(pending.current); }}>重试保存</button>}</div>}
   </article>;
 }
@@ -148,12 +174,12 @@ export default function App() {
   async function add(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault(); if (!editable) return;
     const form = new FormData(e.currentTarget);
-    const item = { code: String(form.get('code')).trim(), name: String(form.get('name')).trim(), shares: Number(form.get('shares')), price: Number(form.get('price')), dps: Number(form.get('dps')), sort: Math.max(-1, ...rows.map(h => h.sort)) + 1 };
+    const item = { code: String(form.get('code')).trim(), name: String(form.get('name')).trim(), shares: Number(form.get('shares')), price: Number(form.get('price')), dps: Number(form.get('dps')), payouts: [] as Payout[], sort: Math.max(-1, ...rows.map(h => h.sort)) + 1 };
     if (!item.code || !item.name || [item.shares, item.price, item.dps].some(n => !Number.isFinite(n) || n < 0)) { setError('请填写有效的名称、代码和非负数值。'); return; }
     setBusy(true);
     const result = await supabase!.from('holdings').insert(item).select().single();
     if (result.error) setError('添加失败，请检查输入并重试。');
-    else { setRows(current => [...current, result.data as Holding]); setAdding(false); }
+    else { setRows(current => [...current, normalizeHolding(result.data as Holding)]); setAdding(false); }
     setBusy(false);
   }
   return <><header><div className="header-inner"><a className="brand" href="#">攒股<span>收息</span><small>分红计算器</small></a><span className="pill">模拟盘记录</span></div></header><main>
@@ -181,7 +207,7 @@ export default function App() {
       {loading && <div className="panel">正在加载持仓…</div>}{!loading && supabase && !error && rows.length === 0 && <div className="panel">暂无持仓{editable ? '，点击「添加股票」开始记录。' : '，等待管理员添加。'}</div>}
       <div className="stock-grid">{rows.map(row => <StockCard key={`${editSession.current}:${row.id}`} row={row} editable={editable} authSession={editSession} onChange={next => setRows(current => current.map(h => h.id === next.id ? next : h))} onDelete={() => { if (!busy) void remove(row); }} onStatus={(id, state) => setSaveStates(current => ({ ...current, [id]: state }))} />)}</div>
     </section>
-    <section className="panel calendar"><div className="section-title"><h2>按月到账表</h2><span className="pill">持仓测算 / 预估</span></div><p className="section-note">2026年12月 — 2027年11月 · 按当前股数、每股分红及默认到账比例测算</p>{payouts.unscheduled.length > 0 && <p className="section-note">{payouts.unscheduled.map(h => `${h.name}（${h.code}）`).join('、')}：未配置到账月份，不计入按月表</p>}<div className="month-table">{payouts.months.map(m => <div className={`month-row ${m.special ? 'special' : ''}`} key={m.month}><time>{m.month}</time><div><b>{payoutsUnavailable ? '—' : m.amount ? `约 ¥${money(m.amount)}` : '¥0.00'}</b>{!payoutsUnavailable && m.note && <small>{m.note}</small>}{m.special && <em>不计入合计</em>}</div></div>)}</div><div className="calendar-total"><span>到账合计（不含特别分红）</span><strong>{payoutsUnavailable ? '—' : `约 ¥${money(payouts.total)}`}</strong></div></section>
+    <section className="panel calendar"><div className="section-title"><h2>按月到账表</h2><span className="pill">持仓测算 / 预估</span></div><p className="section-note">2026年12月 — 2027年11月 · 按当前股数 × 各次每股到账金额测算</p>{payouts.unscheduled.length > 0 && <p className="section-note">{payouts.unscheduled.map(h => `${h.name}（${h.code}）`).join('、')}：未配置到账月份，不计入按月表</p>}<div className="month-table">{payouts.months.map((m, i) => <div className={`month-row ${m.special ? 'special' : ''}`} key={`${m.month}:${i}`}><time>{m.month}</time><div><b>{payoutsUnavailable ? '—' : m.amount ? `约 ¥${money(m.amount)}` : '¥0.00'}</b>{!payoutsUnavailable && m.note && <small>{m.note}</small>}{m.special && <em>不计入合计</em>}</div></div>)}</div><div className="calendar-total"><span>到账合计（不含特别分红）</span><strong>{payoutsUnavailable ? '—' : `约 ¥${money(payouts.total)}`}</strong></div></section>
     <section className="panel methodology"><p className="eyebrow">不同口径，分开看</p><h2>合计口径</h2><dl><div><dt>默认持仓 · 按2025每股分红简单乘</dt><dd>年分红约 ¥22,780</dd></div><div><dt>当前持仓按每股分红计算</dt><dd>{loading || !supabase || (error && rows.length === 0) ? '—' : `¥${money(summary.income)}`}</dd></div><div><dt>按月到账合计（不含白药特别分红）</dt><dd>{payoutsUnavailable ? '—' : `约 ¥${money(payouts.total)}`}</dd></div><div><dt>含特别分红</dt><dd>{payoutsUnavailable ? '—' : `约 ¥${money(payouts.includingSpecial)}`}</dd></div></dl><p className="section-note">白药特别分红默认不计入合计，单独一行显示。每股分红年度口径与到账时间口径不同，不强行对齐。</p></section>
   </main><footer><strong>攒股收息 · 与时间做朋友</strong><p>{disclaimer}</p></footer></>;
 }
