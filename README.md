@@ -13,7 +13,7 @@ cp .env.example .env
 npm run dev
 ```
 
-环境变量：`VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`。未配置时页面明确显示错误，不会退回本地持仓。`.env` 不提交。前端绝不可放置 `service_role` 密钥；Vite 环境变量会被公开打包。匿名访客只使用公共密钥查询，不进行匿名登录。
+环境变量：`VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`。未配置或任一值为 `__PENDING__` 时页面显示「未配置 Supabase」，不会退回本地持仓。`.env` 保持忽略、不提交；生产配置 `.env.production` 则提交到仓库，只允许公开 anon / publishable key。前端绝不可放置 `service_role` 或 `sb_secret_` 密钥；Vite 环境变量会被公开打包。匿名访客只使用公共密钥查询，不进行匿名登录。
 
 ## Supabase 配置
 
@@ -52,4 +52,10 @@ npx tsc --noEmit
 
 ## GitHub Pages
 
-仓库尚无远程地址，不会自动推送。后续创建 GitHub 仓库，在 Settings → Pages 中选择 GitHub Actions。在 Actions 仓库变量中配置 `VITE_SUPABASE_URL` 与 `VITE_SUPABASE_ANON_KEY`（工作流从 `vars.` 读取）。推送 `main` 后工作流构建并发布。Vite 使用 `base: './'`，支持仓库子路径。环境变量是构建时注入，修改变量后需要重新构建。
+在 Settings → Pages 中选择 GitHub Actions。无需设置 Actions 仓库变量：生产构建由 Vite 自动读取已提交的 `.env.production`。将其中两个 `__PENDING__` 分别替换为项目 URL 与公开 anon / publishable key，提交后重新构建即可；占位符版本可以构建，但页面只显示未配置状态，不会连接 Supabase。
+
+推送 `main` 后工作流构建并发布；向 `main` 提交 PR 时，同一工作流执行 `npm ci`、`npx tsc --noEmit`、`npm test`、`npm run build`，但不上传 Pages 产物或部署。构建后严格扫描 `dist` 内所有文件，出现 `service_role` 或 `sb_secret_` 任一字符串就失败，扫描出错也会阻止发布；错误日志不打印可能含密钥的文件内容。
+
+注意：这是严格字符串检查，不是密钥解析器；当前 Supabase SDK 自身的密钥类型识别代码也含有 `sb_secret_` 字面量。占位符构建会移除未使用的客户端代码，但填入真实公开配置后，SDK 代码可能被打包并触发检查。届时需核查依赖与产物，不能将此类失败直接当作真实密钥泄露，也不能绕过检查发布。
+
+Vite 使用 `base: './'`，支持仓库子路径。配置是构建时注入，修改 `.env.production` 后需要重新构建。本地开发继续使用不提交的 `.env`；生产模式的 `.env.production` 优先于 `.env`，不要把开发配置误认为生产配置。

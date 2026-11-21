@@ -2,13 +2,15 @@ name: 部署到 GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
   pages: write
   id-token: write
 concurrency:
-  group: pages
+  group: pages-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
@@ -20,16 +22,30 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npx tsc --noEmit
       - run: npm test
       - run: npm run build
-        env:
-          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+      - name: 检查构建产物不含服务端密钥标记
+        shell: bash
+        run: |
+          if rg --text --hidden --no-ignore --quiet 'service_role|sb_secret_' dist; then
+            echo '构建产物包含禁止的服务端密钥标记，停止发布。'
+            exit 1
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then
+              echo '构建产物扫描失败，停止发布。'
+              exit "$status"
+            fi
+          fi
       - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
         with:
           path: dist
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
