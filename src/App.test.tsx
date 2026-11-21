@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import App from './App';
-import type { Holding } from './calc';
+import { defaults, type Holding } from './calc';
 
 const mocks = vi.hoisted(() => ({
   load: vi.fn(), update: vi.fn(), rpc: vi.fn(), getSession: vi.fn(), sendOtp: vi.fn(), verifyOtp: vi.fn(),
@@ -40,6 +40,42 @@ async function auth(loggedIn: boolean) {
   act(() => mocks.authChange!(loggedIn ? 'SIGNED_IN' : 'SIGNED_OUT', loggedIn ? { user: { id: 'owner' } } : null));
   await tick();
 }
+
+it('编辑股数即时更新月表及三处合计，保存后保持一致', async () => {
+  mocks.load.mockImplementation(async () => defaults.map((h, i) => i === 0 ? { ...serverRow } : { ...h, id: h.code, sort: i }));
+  render(<App />); await tick();
+  expect(screen.getAllByText('约 ¥20,956.00')).toHaveLength(2);
+  expect(screen.getByText('约 ¥21,994.00')).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('平安股数'), { target: { value: '6000' } });
+  expect(mocks.update).not.toHaveBeenCalled();
+  expect(screen.getByText('2027-06').parentElement!.textContent).toContain('约 ¥12,003.00');
+  expect(screen.getByText('2027-10').parentElement!.textContent).toContain('约 ¥5,700.00');
+  expect(screen.getByText('平安末期10500 + 兴业末期1503')).toBeTruthy();
+  expect(screen.getAllByText('约 ¥23,656.00')).toHaveLength(2);
+  expect(screen.getByText('约 ¥24,694.00')).toBeTruthy();
+  expect(screen.getByText('年分红约 ¥22,780')).toBeTruthy();
+  await tick(600);
+  expect(serverRow.shares).toBe(6000);
+  expect(screen.getAllByText('约 ¥23,656.00')).toHaveLength(2);
+  expect(screen.getByText('约 ¥24,694.00')).toBeTruthy();
+});
+
+it('修改每股分红即使保存失败也保留当前月表测算', async () => {
+  mocks.update.mockImplementationOnce(() => ({ eq: () => ({ select: () => ({ single: async () => ({ error: new Error('网络失败') }) }) }) }));
+  render(<App />); await tick();
+  fireEvent.change(screen.getByLabelText('平安每股分红（元）'), { target: { value: '5.4' } });
+  expect(screen.getByText('2027-06').parentElement!.textContent).toContain('约 ¥17,500.00');
+  await tick(600);
+  expect(screen.getByText('保存失败')).toBeTruthy();
+  expect(screen.getAllByText('约 ¥27,000.00')).toHaveLength(3);
+});
+
+it('月表列出无到账配置的持仓而不虚构月份', async () => {
+  mocks.load.mockResolvedValueOnce([{ ...serverRow, code: '123456', name: '新股票' }]);
+  render(<App />); await tick();
+  expect(screen.getByText('新股票（123456）：未配置到账月份，不计入按月表')).toBeTruthy();
+  expect(screen.getAllByText('约 ¥0.00')).toHaveLength(3);
+});
 
 it('保存后重新登录不能将保留的旧行覆盖另一浏览器的新持仓', async () => {
   render(<App />); await tick();
