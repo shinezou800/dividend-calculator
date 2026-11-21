@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./db', () => ({
   canEdit: (loggedIn: boolean, admin: boolean) => loggedIn && admin,
   loadHoldings: mocks.load,
+  normalizeHolding: (row: Holding) => ({ ...row, payouts: row.payouts ?? [] }),
   supabase: {
     rpc: mocks.rpc,
     auth: {
@@ -26,7 +27,7 @@ vi.mock('./db', () => ({
 let serverRow: Holding;
 beforeEach(() => {
   vi.useFakeTimers();
-  serverRow = { id: 'stock', code: '601318', name: '平安', shares: 5000, price: 55.46, dps: 2.7, dps_note: null, sort: 0 };
+  serverRow = { id: 'stock', code: '601318', name: '平安', shares: 5000, price: 55.46, dps: 2.7, dps_note: null, sort: 0, payouts: defaults[0].payouts };
   mocks.load.mockImplementation(async () => [{ ...serverRow }]);
   mocks.rpc.mockResolvedValue({ data: true, error: null });
   mocks.getSession.mockResolvedValue({ data: { session: { user: { id: 'owner' } } } });
@@ -60,21 +61,69 @@ it('编辑股数即时更新月表及三处合计，保存后保持一致', asyn
   expect(screen.getByText('约 ¥24,694.00')).toBeTruthy();
 });
 
-it('修改每股分红即使保存失败也保留当前月表测算', async () => {
+it('修改每股到账即使保存失败也保留当前月表测算', async () => {
   mocks.update.mockImplementationOnce(() => ({ eq: () => ({ select: () => ({ single: async () => ({ error: new Error('网络失败') }) }) }) }));
   render(<App />); await tick();
-  fireEvent.change(screen.getByLabelText('平安每股分红（元）'), { target: { value: '5.4' } });
+  fireEvent.change(screen.getByLabelText('平安到账1每股金额'), { target: { value: '3.5' } });
   expect(screen.getByText('2027-06').parentElement!.textContent).toContain('约 ¥17,500.00');
   await tick(600);
   expect(screen.getByText('保存失败')).toBeTruthy();
-  expect(screen.getAllByText('约 ¥27,000.00')).toHaveLength(3);
+  expect(screen.getAllByText('约 ¥22,250.00')).toHaveLength(3);
 });
 
 it('月表列出无到账配置的持仓而不虚构月份', async () => {
-  mocks.load.mockResolvedValueOnce([{ ...serverRow, code: '123456', name: '新股票' }]);
+  mocks.load.mockResolvedValueOnce([{ ...serverRow, code: '123456', name: '新股票', payouts: [] }]);
   render(<App />); await tick();
   expect(screen.getByText('新股票（123456）：未配置到账月份，不计入按月表')).toBeTruthy();
   expect(screen.getAllByText('约 ¥0.00')).toHaveLength(3);
+});
+
+it('管理员为无配置股票添加到账后立即计入月表并随持仓保存，可标特别分红及删除', async () => {
+  serverRow = { ...serverRow, code: '123456', name: '新股票', shares: 100, payouts: [] };
+  render(<App />); await tick();
+  fireEvent.click(screen.getByText('到账月份', { exact: true }));
+  fireEvent.click(screen.getByText('添加到账', { exact: true }));
+  fireEvent.change(screen.getByLabelText('新股票到账1月份'), { target: { value: '12' } });
+  fireEvent.change(screen.getByLabelText('新股票到账1每股金额'), { target: { value: '0.5' } });
+  fireEvent.change(screen.getByLabelText('新股票到账1备注'), { target: { value: '新增到账' } });
+  expect(screen.getByText('2026-12').parentElement!.textContent).toContain('约 ¥50.00');
+  expect(screen.queryByText('新股票（123456）：未配置到账月份，不计入按月表')).toBeNull();
+  expect(mocks.update).not.toHaveBeenCalled();
+  await tick(600);
+  expect(serverRow.payouts).toEqual([{ month: 12, dps: 0.5, note: '新增到账' }]);
+  expect(mocks.update).toHaveBeenLastCalledWith(expect.objectContaining({ payouts: serverRow.payouts }));
+  fireEvent.click(screen.getByLabelText('新股票到账1特别分红'));
+  expect(screen.getAllByText('约 ¥0.00')).toHaveLength(2);
+  expect(screen.getAllByText('约 ¥50.00')).toHaveLength(2);
+  await tick(600);
+  expect(serverRow.payouts[0].special).toBe(true);
+  fireEvent.click(screen.getByLabelText('删除新股票到账1'));
+  expect(screen.getByText('新股票（123456）：未配置到账月份，不计入按月表')).toBeTruthy();
+  await tick(600);
+  expect(serverRow.payouts).toEqual([]);
+});
+
+it('到账编辑拒绝负数、空金额及无效月份，不发送无效保存', async () => {
+  render(<App />); await tick();
+  for (const value of ['-1', '']) {
+    fireEvent.change(screen.getByLabelText('平安到账1每股金额'), { target: { value } });
+    await tick(600);
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(mocks.update).not.toHaveBeenCalled();
+  }
+  fireEvent.change(screen.getByLabelText('平安到账1月份'), { target: { value: '13' } });
+  await tick(600);
+  expect(mocks.update).not.toHaveBeenCalled();
+  expect(serverRow.payouts).toEqual(defaults[0].payouts);
+});
+
+it('访客看不到到账编辑器或添加到账按钮', async () => {
+  mocks.getSession.mockResolvedValueOnce({ data: { session: null } });
+  render(<App />); await tick();
+  expect(screen.queryByText('到账月份', { exact: true })).toBeNull();
+  expect(screen.queryByText('添加到账', { exact: true })).toBeNull();
+  expect(screen.queryByLabelText('平安到账1月份')).toBeNull();
+  expect(screen.getAllByText('约 ¥13,500.00')).toHaveLength(3);
 });
 
 it('持仓加载中或首次读取失败时月表不可用，重新加载成功才显示测算金额', async () => {

@@ -21,13 +21,13 @@ describe('公开持仓读取', () => {
     await expect(loadHoldings()).rejects.toThrow('未配置');
     expect(mocks.createClient).not.toHaveBeenCalled();
   });
-  it.each([{ rows: [] }, { rows: [{ id: '示例' }] }])('访客无需登录即可读取，包括空持仓：%j', async ({ rows }) => {
+  it.each([{ rows: [] }, { rows: [{ id: '示例' }] }, { rows: [{ id: '示例', payouts: null }] }, { rows: [{ id: '示例', payouts: [{ month: 6, dps: 1 }] }] }])('访客无需登录即可读取，缺失及空配置归一化：%j', async ({ rows }) => {
     vi.stubEnv('VITE_SUPABASE_URL', 'https://example.supabase.co'); vi.stubEnv('VITE_SUPABASE_ANON_KEY', '公共密钥');
     const order = vi.fn(); order.mockReturnValueOnce({ order }).mockResolvedValueOnce({ data: rows, error: null });
     mocks.from.mockReturnValue({ select: vi.fn(() => ({ order })) });
     mocks.createClient.mockReturnValue({ from: mocks.from });
     const { loadHoldings } = await import('./db');
-    await expect(loadHoldings()).resolves.toEqual(rows);
+    await expect(loadHoldings()).resolves.toEqual(rows.map(row => ({ ...row, payouts: 'payouts' in row && row.payouts ? row.payouts : [] })));
     expect(mocks.from).toHaveBeenCalledWith('holdings');
     expect(mocks.createClient).toHaveBeenCalledWith('https://example.supabase.co', '公共密钥', { auth: { flowType: 'implicit', detectSessionInUrl: true, persistSession: true, autoRefreshToken: true } });
   });

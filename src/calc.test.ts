@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { annual, defaults, dividendYield, monthlyPayouts, totals } from './calc';
+import { annual, defaults, dividendYield, isPayout, monthlyPayouts, normalizePayouts, totals } from './calc';
 import { canEdit } from './db';
 describe('分红计算', () => {
   it('平安股息率和年分红', () => {
@@ -47,18 +47,18 @@ describe('按持仓测算到账月份', () => {
     expect(result.includingSpecial).toBe(24694);
     expect(result.special).toBe(1038);
   });
-  it('每股分红改变同时缩放普通及特别分红，不受价格影响', () => {
-    const result = monthlyPayouts(defaults.map(h => h.code === '000538' ? { ...h, dps: 5.204, price: 1 } : h));
+  it('各次每股到账改变同时缩放普通及特别分红', () => {
+    const result = monthlyPayouts(defaults.map(h => h.code === '000538' ? { ...h, payouts: h.payouts.map(p => ({ ...p, dps: p.dps * 2 })) } : h));
     expect(result.months[4].amount).toBe(3166);
     expect(result.months[9].amount).toBe(2076);
     expect(result.total).toBe(22539);
     expect(result.includingSpecial).toBe(24615);
     expect(result.special).toBe(2076);
   });
-  it('删除白药后不再计入到账金额，特别分红行仍保留', () => {
+  it('删除白药后不再计入到账金额及特别分红', () => {
     const result = monthlyPayouts(defaults.filter(h => h.code !== '000538'));
     expect(result.months[4].amount).toBe(0);
-    expect(result.months[9]).toMatchObject({ amount: 0, special: true });
+    expect(result.months[9]).toMatchObject({ amount: 0, special: false });
     expect(result.total).toBe(19373);
     expect(result.includingSpecial).toBe(19373);
     expect(result.special).toBe(0);
@@ -70,8 +70,8 @@ describe('按持仓测算到账月份', () => {
     expect(result.unscheduled).toEqual([extra]);
     expect(totals([...defaults, extra]).income).toBe(22980);
   });
-  it('空持仓或零股数、零分红时各月及合计为零', () => {
-    for (const rows of [[], defaults.map(h => ({ ...h, shares: 0 })), defaults.map(h => ({ ...h, dps: 0 }))]) {
+  it('空持仓或零股数、零到账时各月及合计为零', () => {
+    for (const rows of [[], defaults.map(h => ({ ...h, shares: 0 })), defaults.map(h => ({ ...h, payouts: h.payouts.map(p => ({ ...p, dps: 0 })) }))]) {
       const result = monthlyPayouts(rows);
       expect(result.months).toHaveLength(12);
       expect(result.months.every(m => m.amount === 0)).toBe(true);
@@ -83,13 +83,42 @@ describe('按持仓测算到账月份', () => {
     expect(result.months[6].amount).toBe(3.5);
     expect(result.months[10].amount).toBe(1.9);
     expect(result.total).toBe(5.4);
-    expect(result.months[6].note).toBe('平安末期3.5 + 兴业末期0');
+    expect(result.months[6].note).toBe('平安末期1.75 + 平安末期1.75');
   });
   it.each([[525, 263.03], [524.9999, 263.02], [525.0001, 263.03]])('兴业股数 %s 的半分边界正确四舍五入', (shares, expected) => {
     const result = monthlyPayouts([{ ...defaults[1], shares }]);
     expect(result.months[6].amount).toBe(expected);
-    expect(result.months[6].note).toBe(`平安末期0 + 兴业末期${expected}`);
+    expect(result.months[6].note).toBe('兴业末期');
     expect(result.total).toBeCloseTo(result.months[2].amount + expected, 8);
+  });
+  it('海尔种子每股到账按分取整为2675元，年度分红和价格不改变到账', () => {
+    expect(monthlyPayouts([defaults[2]]).months[8].amount).toBe(2675);
+    expect(monthlyPayouts(defaults.map(h => ({ ...h, dps: 0, price: 0 })))).toEqual(monthlyPayouts(defaults));
+  });
+  it('新股票配置后自动计入，删除配置或股票恢复原合计', () => {
+    const extra = { code: '123456', name: '新股票', shares: 100, payouts: [{ month: 12, dps: 0.5, note: '新增到账' }] };
+    const result = monthlyPayouts([...defaults, extra]);
+    expect(result.months[0]).toMatchObject({ month: '2026-12', amount: 50 });
+    expect(result.total).toBe(21006);
+    expect(result.includingSpecial).toBe(22044);
+    expect(result.unscheduled).toEqual([]);
+    expect(monthlyPayouts([...defaults, { ...extra, payouts: [] }]).total).toBe(20956);
+    expect(monthlyPayouts(defaults).total).toBe(20956);
+  });
+  it('同月普通与特别到账分行，不将普通到账排除或合并特别到账', () => {
+    const result = monthlyPayouts([{ code: 'X', name: '测试', shares: 100, payouts: [
+      { month: 9, dps: 1 }, { month: 9, dps: 0.5, special: true }, { month: 9, dps: 0.2, special: true },
+    ] }]);
+    expect(result.months.filter(m => m.month === '2027-09').map(m => [m.amount, m.special])).toEqual([[100, false], [50, true], [20, true]]);
+    expect([result.total, result.special, result.includingSpecial]).toEqual([100, 70, 170]);
+  });
+  it('缺失、null及非法到账配置不生成虚构月份', () => {
+    expect(normalizePayouts(null)).toEqual([]);
+    expect(normalizePayouts(undefined)).toEqual([]);
+    expect(normalizePayouts({ month: 1, dps: 1 })).toEqual([]);
+    for (const value of [{ month: 0, dps: 1 }, { month: 13, dps: 1 }, { month: 1.5, dps: 1 }, { month: 1, dps: -1 }, { month: 1, dps: NaN }, { month: 1, dps: Infinity }, { month: 1, dps: 1, special: 'true' }]) expect(isPayout(value)).toBe(false);
+    expect(isPayout({ month: 12, dps: 0 })).toBe(true);
+    expect(monthlyPayouts([{ code: 'X', name: '无配置', shares: 100, payouts: null }]).total).toBe(0);
   });
 });
 describe('编辑权限默认拒绝', () => {
