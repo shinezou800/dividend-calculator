@@ -5,7 +5,7 @@ import App from './App';
 import type { Holding } from './calc';
 
 const mocks = vi.hoisted(() => ({
-  load: vi.fn(), update: vi.fn(), rpc: vi.fn(),
+  load: vi.fn(), update: vi.fn(), rpc: vi.fn(), getSession: vi.fn(), sendOtp: vi.fn(), verifyOtp: vi.fn(),
   authChange: undefined as undefined | ((event: string, session: { user: { id: string } } | null) => void),
 }));
 vi.mock('./db', () => ({
@@ -14,7 +14,9 @@ vi.mock('./db', () => ({
   supabase: {
     rpc: mocks.rpc,
     auth: {
-      getSession: async () => ({ data: { session: { user: { id: 'owner' } } } }),
+      getSession: mocks.getSession,
+      signInWithOtp: mocks.sendOtp,
+      verifyOtp: mocks.verifyOtp,
       onAuthStateChange: (callback: typeof mocks.authChange) => { mocks.authChange = callback; return { data: { subscription: { unsubscribe() {} } } }; },
     },
     from: () => ({ update: mocks.update }),
@@ -27,9 +29,12 @@ beforeEach(() => {
   serverRow = { id: 'stock', code: '601318', name: '平安', shares: 5000, price: 55.46, dps: 2.7, dps_note: null, sort: 0 };
   mocks.load.mockImplementation(async () => [{ ...serverRow }]);
   mocks.rpc.mockResolvedValue({ data: true, error: null });
+  mocks.getSession.mockResolvedValue({ data: { session: { user: { id: 'owner' } } } });
+  mocks.sendOtp.mockResolvedValue({ error: null });
+  mocks.verifyOtp.mockResolvedValue({ error: null });
   mocks.update.mockImplementation((patch: Partial<Holding>) => ({ eq: () => ({ select: () => ({ single: async () => { serverRow = { ...serverRow, ...patch }; return { data: { id: serverRow.id }, error: null }; } }) }) }));
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.clearAllMocks(); window.history.replaceState({}, '', '/'); });
 const tick = async (ms = 0) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
 async function auth(loggedIn: boolean) {
   act(() => mocks.authChange!(loggedIn ? 'SIGNED_IN' : 'SIGNED_OUT', loggedIn ? { user: { id: 'owner' } } : null));
@@ -185,4 +190,44 @@ it('重新加载未结束时退出，迟到的管理员结果不能恢复编辑�
   expect(screen.getByText('管理员登录')).toBeTruthy();
   expect(screen.queryByText('9,999')).toBeNull();
   expect(mocks.update).not.toHaveBeenCalled();
+});
+
+it('发送登录链接保留Pages子路径，验证码为空时不要求验证码或发起验证', async () => {
+  window.history.replaceState({}, '', '/dividend-calculator/?tracking=1#old');
+  mocks.getSession.mockResolvedValue({ data: { session: null } });
+  render(<App />); await tick();
+  fireEvent.click(screen.getByText('管理员登录'));
+  fireEvent.change(screen.getByLabelText('邮箱'), { target: { value: 'owner@example.com' } });
+  fireEvent.click(screen.getByText('发送登录邮件')); await tick();
+  expect(mocks.sendOtp).toHaveBeenCalledWith({ email: 'owner@example.com', options: { shouldCreateUser: false, emailRedirectTo: `${window.location.origin}/dividend-calculator/` } });
+  expect(screen.getByText('登录邮件已发送，请打开邮箱并点击邮件中的登录链接，返回本页后将自动登录。')).toBeTruthy();
+  expect((screen.getByLabelText('六位验证码') as HTMLInputElement).required).toBe(false);
+  expect((screen.getByText('使用验证码登录') as HTMLButtonElement).disabled).toBe(true);
+  expect(mocks.verifyOtp).not.toHaveBeenCalled();
+  await auth(true);
+  expect(screen.getByLabelText('平安股数')).toBeTruthy();
+  expect(window.location.pathname).toBe('/dividend-calculator/');
+});
+
+it('邮件中有验证码时仍可选择验证码登录', async () => {
+  mocks.getSession.mockResolvedValue({ data: { session: null } });
+  render(<App />); await tick();
+  fireEvent.click(screen.getByText('管理员登录'));
+  fireEvent.change(screen.getByLabelText('邮箱'), { target: { value: 'owner@example.com' } });
+  fireEvent.click(screen.getByText('发送登录邮件')); await tick();
+  fireEvent.change(screen.getByLabelText('六位验证码'), { target: { value: '123456' } });
+  fireEvent.click(screen.getByText('使用验证码登录')); await tick();
+  expect(mocks.verifyOtp).toHaveBeenCalledWith({ email: 'owner@example.com', token: '123456', type: 'email' });
+});
+
+it('登录邮件发送失败时显示错误并允许重试', async () => {
+  mocks.getSession.mockResolvedValue({ data: { session: null } });
+  mocks.sendOtp.mockResolvedValueOnce({ error: new Error('发送失败') });
+  render(<App />); await tick();
+  fireEvent.click(screen.getByText('管理员登录'));
+  fireEvent.change(screen.getByLabelText('邮箱'), { target: { value: 'owner@example.com' } });
+  fireEvent.click(screen.getByText('发送登录邮件')); await tick();
+  expect(screen.getByText('发送失败，请检查邮箱、网络或联系管理员。')).toBeTruthy();
+  expect(screen.getByText('发送登录邮件')).toBeTruthy();
+  expect(screen.queryByLabelText('六位验证码')).toBeNull();
 });

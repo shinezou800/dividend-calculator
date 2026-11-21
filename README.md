@@ -25,8 +25,10 @@ npm run dev
 insert into public.app_admin (user_id) values ('替换为管理员用户UUID');
 ```
 
-4. 在 Authentication URL Configuration 中配置站点 URL 和允许的重定向 URL，包含开发地址及 GitHub Pages 完整子路径，例如 `https://用户名.github.io/仓库名/`。邮件模板支持魔法链接；如需直接输入六位验证码，在登录邮件模板中显示 `{{ .Token }}`。
-5. 点击「管理员登录」，输入邮箱发送邮件，再输入六位验证码，或点击邮件魔法链接。会话保存在浏览器本地存储中，刷新后保留；退出登录清除会话。未授权账号显示「该账号无编辑权限」。
+4. 在 Authentication URL Configuration 中配置站点 URL 和允许的重定向 URL；本项目生产地址为 `https://shinezou800.github.io/dividend-calculator/`，必须保留完整子路径和末尾斜杠。需要本地登录时另行允许开发地址。
+5. 点击「管理员登录」，输入邮箱发送登录邮件，然后点击邮件中的登录链接。当前免费项目使用默认 SMTP，无法自定义邮件模板，邮件只有登录链接，没有六位验证码，无需填写验证码。若以后使用支持验证码的邮件模板，可展开可选验证码区域登录。
+
+登录邮件重定向回当前页面路径（不包含查询参数或旧片段）；客户端使用 implicit 流程和 `detectSessionInUrl` 读取魔法链接回传的会话，再检查管理员权限并加载持仓。会话保存在浏览器本地存储中，刷新后保留；退出登录清除会话。未授权账号显示「该账号无编辑权限」。
 
 数据库权限是安全边界，不依赖前端按钮隐藏：`holdings` 对所有访客只读，写入由 RLS 调用 `is_admin()` 校验；`app_admin` 开启 RLS 且无访问策略，前端无法读取或修改白名单。`is_admin()` 使用固定空搜索路径的 SECURITY DEFINER 函数，仅返回当前用户是否为管理员。每次修改、删除均带有行 ID 条件，兼容 safeupdate。
 
@@ -52,7 +54,7 @@ npx tsc --noEmit
 
 ## GitHub Pages
 
-在 Settings → Pages 中选择 GitHub Actions。无需设置 Actions 仓库变量：生产构建由 Vite 自动读取已提交的 `.env.production`。将其中两个 `__PENDING__` 分别替换为项目 URL 与公开 anon / publishable key，提交后重新构建即可；占位符版本可以构建，但页面只显示未配置状态，不会连接 Supabase。
+在 Settings → Pages 中选择 GitHub Actions。无需设置 Actions 仓库变量：生产构建由 Vite 自动读取已提交的 `.env.production`。当前已填写项目 `icsdwmnethygsyknmmei` 的 URL 与公开 legacy anon key；此密钥可公开，数据权限由 RLS 控制。更换项目时仅填写公开 anon / publishable key，提交后重新构建即可；若使用 `__PENDING__` 占位符，页面只显示未配置状态，不会连接 Supabase。
 
 推送 `main` 后工作流构建并发布；向 `main` 提交 PR 时，同一工作流执行 `npm ci`、`npx tsc --noEmit`、`npm test`、`npm run build`，但不上传 Pages 产物或部署。构建后运行 `node scripts/check-dist.mjs`，递归扫描 `dist` 内所有文件（包含隐藏文件），检测以下服务端密钥：
 

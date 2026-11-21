@@ -125,12 +125,13 @@ export default function App() {
   }, [unsaved]);
   async function authenticate(verify: boolean) {
     if (!supabase) return;
+    if (verify && !/^\d{6}$/.test(token)) return;
     setBusy(true); setAuthMessage('');
     try {
       const result = verify ? await supabase.auth.verifyOtp({ email, token, type: 'email' }) : await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + window.location.pathname } });
       if (result.error) throw result.error;
       if (verify) { setLoginOpen(false); setToken(''); setAuthMessage('登录成功'); }
-      else { setSent(true); setAuthMessage('邮件已发送，请输入六位验证码，或点击邮件中的登录链接。'); }
+      else { setSent(true); setAuthMessage('登录邮件已发送，请打开邮箱并点击邮件中的登录链接，返回本页后将自动登录。'); }
     } catch { setAuthMessage(verify ? '验证码无效或已过期，请重试。' : '发送失败，请检查邮箱、网络或联系管理员。'); }
     finally { setBusy(false); }
   }
@@ -158,7 +159,19 @@ export default function App() {
     {!supabase && <div className="alert" role="alert"><b>未配置 Supabase</b><p>请设置 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY 后重新构建。不会使用本地数据替代云端数据。</p></div>}
     {loggedIn && authChecked && !admin && <div className="notice">该账号无编辑权限</div>}
     {authMessage && <p role="status" className="notice">{authMessage}</p>}
-    {loginOpen && !loggedIn && <form className="panel login" onSubmit={e => { e.preventDefault(); void authenticate(sent); }}><h2>管理员登录</h2><label>邮箱<input type="email" required value={email} disabled={sent} onChange={e => setEmail(e.target.value)} autoComplete="email" /></label>{sent && <label>六位验证码<input required pattern="[0-9]{6}" maxLength={6} inputMode="numeric" autoComplete="one-time-code" value={token} onChange={e => setToken(e.target.value)} /></label>}<button className="primary" disabled={busy}>{busy ? '处理中…' : sent ? '验证并登录' : '发送验证码'}</button>{sent && <button type="button" onClick={() => { setSent(false); setToken(''); }}>更换邮箱 / 重新发送</button>}</form>}
+    {loginOpen && !loggedIn && <form className="panel login" onSubmit={e => { e.preventDefault(); void authenticate(sent); }}>
+      <h2>管理员登录</h2>
+      <label>邮箱<input type="email" required value={email} disabled={sent} onChange={e => setEmail(e.target.value)} autoComplete="email" /></label>
+      {!sent && <button className="primary" disabled={busy}>{busy ? '发送中…' : '发送登录邮件'}</button>}
+      {sent && <>
+        <p className="section-note">请点击邮件中的登录链接。邮件没有验证码时，无需输入验证码。</p>
+        <details><summary>邮件中有六位验证码？（可选）</summary>
+          <label>六位验证码<input pattern="[0-9]{6}" maxLength={6} inputMode="numeric" autoComplete="one-time-code" value={token} onChange={e => setToken(e.target.value)} /></label>
+          <button className="primary" disabled={busy || !/^\d{6}$/.test(token)}>{busy ? '处理中…' : '使用验证码登录'}</button>
+        </details>
+        <button type="button" onClick={() => { setSent(false); setToken(''); }}>更换邮箱 / 重新发送</button>
+      </>}
+    </form>}
     {error && <div className="alert" role="alert">{error}{!unsaved && <button onClick={() => refresh.current()}>重新加载</button>}</div>}
     <section className="summary" aria-label="持仓概览">{[['总市值', `¥${money(summary.value)}`], ['年分红合计', `¥${money(summary.income)}`], ['组合股息率', percent(summary.yield)], ['月均分红', `¥${money(summary.monthly)}`]].map(([label, value]) => <div key={label}><span>{label}</span><strong>{loading || !supabase || (error && rows.length === 0) ? '—' : value}</strong></div>)}</section>
     <section><div className="section-title"><h2>我的持仓 <small>{rows.length} 只股票</small></h2>{editable && <button className="primary" disabled={busy} onClick={() => setAdding(!adding)}>{adding ? '取消添加' : '＋ 添加股票'}</button>}</div><p className="section-note">{editable ? '修改数值后约 600 毫秒自动保存；所有访客可查看。' : '所有人可查看，仅管理员登录后可修改。'}</p>

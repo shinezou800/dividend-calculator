@@ -29,6 +29,7 @@ describe('公开持仓读取', () => {
     const { loadHoldings } = await import('./db');
     await expect(loadHoldings()).resolves.toEqual(rows);
     expect(mocks.from).toHaveBeenCalledWith('holdings');
+    expect(mocks.createClient).toHaveBeenCalledWith('https://example.supabase.co', '公共密钥', { auth: { flowType: 'implicit', detectSessionInUrl: true, persistSession: true, autoRefreshToken: true } });
   });
   it('查询失败不伪造默认数据', async () => {
     vi.stubEnv('VITE_SUPABASE_URL', 'https://example.supabase.co'); vi.stubEnv('VITE_SUPABASE_ANON_KEY', '公共密钥');
