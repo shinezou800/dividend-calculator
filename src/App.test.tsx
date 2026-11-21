@@ -77,6 +77,39 @@ it('月表列出无到账配置的持仓而不虚构月份', async () => {
   expect(screen.getAllByText('约 ¥0.00')).toHaveLength(3);
 });
 
+it('持仓加载中或首次读取失败时月表不可用，重新加载成功才显示测算金额', async () => {
+  let fail!: (error: Error) => void;
+  mocks.load.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+  mocks.load.mockResolvedValueOnce(defaults.map((h, i) => ({ ...h, id: h.code, sort: i })));
+  const { container } = render(<App />); await tick();
+  const expectUnavailable = () => {
+    expect([...container.querySelectorAll('.month-row b')].map(e => e.textContent)).toEqual(Array(12).fill('—'));
+    expect(container.querySelector('.calendar-total strong')!.textContent).toBe('—');
+    expect(screen.getByText('按月到账合计（不含白药特别分红）').nextElementSibling!.textContent).toBe('—');
+    expect(screen.getByText('含特别分红').nextElementSibling!.textContent).toBe('—');
+    expect(screen.queryByText('平安末期0 + 兴业末期0')).toBeNull();
+  };
+  expectUnavailable();
+  await act(async () => { fail(new Error('读取失败')); }); await tick();
+  expect(screen.getByRole('alert').textContent).toContain('数据加载失败');
+  expectUnavailable();
+  fireEvent.click(screen.getByText('重新加载')); await tick();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByText('2027-06').parentElement!.textContent).toContain('约 ¥10,253.00');
+  expect(screen.getAllByText('约 ¥20,956.00')).toHaveLength(2);
+  expect(screen.getByText('约 ¥21,994.00')).toBeTruthy();
+});
+
+it('读取失败后成功加载真正的空持仓时月表及合计显示零', async () => {
+  mocks.load.mockRejectedValueOnce(new Error('读取失败')).mockResolvedValueOnce([]);
+  const { container } = render(<App />); await tick();
+  expect(container.querySelector('.calendar-total strong')!.textContent).toBe('—');
+  fireEvent.click(screen.getByText('重新加载')); await tick();
+  expect(screen.getByText('暂无持仓，点击「添加股票」开始记录。')).toBeTruthy();
+  expect([...container.querySelectorAll('.month-row b')].map(e => e.textContent)).toEqual(Array(12).fill('¥0.00'));
+  expect(screen.getAllByText('约 ¥0.00')).toHaveLength(3);
+});
+
 it('保存后重新登录不能将保留的旧行覆盖另一浏览器的新持仓', async () => {
   render(<App />); await tick();
   fireEvent.change(screen.getByLabelText('平安股数'), { target: { value: '5001' } });
