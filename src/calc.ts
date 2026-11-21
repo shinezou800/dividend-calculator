@@ -13,13 +13,35 @@ export function totals(rows: Position[]) {
   const income = rows.reduce((sum, h) => sum + annual(h), 0);
   return { value, income, yield: value > 0 ? income / value : 0, monthly: income / 12 };
 }
-export const months = [
-  { month: '2026-12', amount: 0 }, { month: '2027-01', amount: 0 },
-  { month: '2027-02', amount: 1695, note: '兴业中期估' }, { month: '2027-03', amount: 0 },
-  { month: '2027-04', amount: 1583, note: '白药年度估' }, { month: '2027-05', amount: 0 },
-  { month: '2027-06', amount: 10253, note: '平安末期8750 + 兴业末期1503' }, { month: '2027-07', amount: 0 },
-  { month: '2027-08', amount: 2675, note: '海尔末期' },
-  { month: '2027-09', amount: 1038, note: '白药特别分红，不确定', special: true },
-  { month: '2027-10', amount: 4750, note: '平安中期' }, { month: '2027-11', amount: 0 },
+const payoutSchedule = [
+  { code: '601318', month: '2027-06', numerator: 8750, denominator: 13500, note: '平安末期', showAmount: true },
+  { code: '601318', month: '2027-10', numerator: 4750, denominator: 13500, note: '平安中期' },
+  { code: '601166', month: '2027-02', numerator: 1695, denominator: 3198, note: '兴业中期估' },
+  { code: '601166', month: '2027-06', numerator: 1503, denominator: 3198, note: '兴业末期', showAmount: true },
+  { code: '600690', month: '2027-08', numerator: 2675, denominator: 3480, note: '海尔末期' },
+  { code: '000538', month: '2027-04', numerator: 1583, denominator: 2602, note: '白药年度估' },
+  { code: '000538', month: '2027-09', numerator: 1038, denominator: 2602, note: '白药特别分红，不确定', special: true },
 ];
-export const monthTotal = (includeSpecial = false) => months.reduce((sum, m) => sum + (!m.special || includeSpecial ? m.amount : 0), 0);
+const payoutMonths = ['2026-12', '2027-01', '2027-02', '2027-03', '2027-04', '2027-05', '2027-06', '2027-07', '2027-08', '2027-09', '2027-10', '2027-11'];
+const cents = (amount: number) => {
+  const scaled = amount * 100;
+  return Math.round(scaled + Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4) / 100;
+};
+export function monthlyPayouts(rows: Pick<Holding, 'code' | 'name' | 'shares' | 'dps'>[]) {
+  const months = payoutMonths.map(month => {
+    const entries = payoutSchedule.filter(s => s.month === month).map(s => {
+      const income = rows.filter(h => h.code === s.code).reduce((sum, h) => sum + h.shares * h.dps, 0);
+      return { ...s, amount: cents(income * s.numerator / s.denominator) };
+    });
+    return {
+      month,
+      amount: cents(entries.reduce((sum, e) => sum + e.amount, 0)),
+      note: entries.map(e => `${e.note}${e.showAmount ? e.amount : ''}`).join(' + '),
+      special: entries.some(e => e.special),
+    };
+  });
+  const total = cents(months.reduce((sum, m) => sum + (m.special ? 0 : m.amount), 0));
+  const special = cents(months.reduce((sum, m) => sum + (m.special ? m.amount : 0), 0));
+  const unscheduled = rows.filter(h => !payoutSchedule.some(s => s.code === h.code));
+  return { months, total, special, includingSpecial: cents(total + special), unscheduled };
+}
