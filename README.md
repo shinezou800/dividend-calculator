@@ -54,8 +54,11 @@ npx tsc --noEmit
 
 在 Settings → Pages 中选择 GitHub Actions。无需设置 Actions 仓库变量：生产构建由 Vite 自动读取已提交的 `.env.production`。将其中两个 `__PENDING__` 分别替换为项目 URL 与公开 anon / publishable key，提交后重新构建即可；占位符版本可以构建，但页面只显示未配置状态，不会连接 Supabase。
 
-推送 `main` 后工作流构建并发布；向 `main` 提交 PR 时，同一工作流执行 `npm ci`、`npx tsc --noEmit`、`npm test`、`npm run build`，但不上传 Pages 产物或部署。构建后严格扫描 `dist` 内所有文件，出现 `service_role` 或 `sb_secret_` 任一字符串就失败，扫描出错也会阻止发布；错误日志不打印可能含密钥的文件内容。
+推送 `main` 后工作流构建并发布；向 `main` 提交 PR 时，同一工作流执行 `npm ci`、`npx tsc --noEmit`、`npm test`、`npm run build`，但不上传 Pages 产物或部署。构建后运行 `node scripts/check-dist.mjs`，递归扫描 `dist` 内所有文件（包含隐藏文件），检测以下服务端密钥：
 
-注意：这是严格字符串检查，不是密钥解析器；当前 Supabase SDK 自身的密钥类型识别代码也含有 `sb_secret_` 字面量。占位符构建会移除未使用的客户端代码，但填入真实公开配置后，SDK 代码可能被打包并触发检查。届时需核查依赖与产物，不能将此类失败直接当作真实密钥泄露，也不能绕过检查发布。
+- 匹配 `sb_secret_[A-Za-z0-9_-]{20,}` 的密钥。
+- 匹配 `eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+` 的 JWT，且解码后的 JSON 载荷字段 `role` 严格等于 `service_role`。
+
+SDK 中单独的 `sb_secret_` / `service_role` 字面量和公开 anon JWT 不会触发检查。检测到密钥、产物为空或无法完整扫描时阻止发布，错误日志不打印密钥或文件内容。检查只识别上述格式，不验证 JWT 签名，也不能替代正确的密钥管理。
 
 Vite 使用 `base: './'`，支持仓库子路径。配置是构建时注入，修改 `.env.production` 后需要重新构建。本地开发继续使用不提交的 `.env`；生产模式的 `.env.production` 优先于 `.env`，不要把开发配置误认为生产配置。
